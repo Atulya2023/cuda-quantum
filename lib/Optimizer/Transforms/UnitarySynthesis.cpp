@@ -22,7 +22,7 @@
 #include "mlir/Transforms/Passes.h"
 #include <unsupported/Eigen/KroneckerProduct>
 #include <unsupported/Eigen/MatrixFunctions>
-#include <iostream>
+#include <iostream> //NOTE: To be removed
 
 namespace cudaq::opt {
 #define GEN_PASS_DEF_UNITARYSYNTHESIS
@@ -38,11 +38,16 @@ namespace {
 
 constexpr double TOL = 1e-7;
 
+// NOTE: To be removed
 void printmatrix(Eigen::MatrixXcd &matrix){
   Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", " [", " ]", "[", "]" );
   std::cout << matrix.format(CleanFmt) << std::endl;
 }
 
+void printvector(Eigen::VectorXcd &vector){
+  Eigen::IOFormat SinglelineFormat(4, 0, ", ", "\n", " [", " ]", "[", "]");
+  std::cout << vector.format(SinglelineFormat) << std::endl;
+}
 
 /// Base class for unitary synthesis, i.e. decomposing an arbitrary unitary
 /// matrix into native gate set. The native gate set here includes all the
@@ -441,14 +446,11 @@ struct TwoQubitOpKAK : public Decomposer {
   }
 };
 
-/// This logic is based on the Cosine-Sine Decomposition:
-/// https://arxiv.org/pdf/quant-ph/0404089
-/// And explanation given in:
-/// https://nhigham.com/2020/10/27/what-is-the-cs-decomposition/
-
+/// This logic is based on the complete Cosine-Sine Decomposition:
+/// https://arxiv.org/abs/0707.1838
 
 Eigen::VectorXcd householdervector(const Eigen::VectorXcd& x){
-  printf("Inside householdervector\n");
+  // printf("Inside householdervector\n");
   double norm = x.norm();
   std::complex<double> sign = (x(0) == std::complex<double>(0.0, 0.0)) ? 1.0 : (x(0)/std::abs(x(0)));
   std::complex<double> alpha = -sign * norm;
@@ -458,28 +460,36 @@ Eigen::VectorXcd householdervector(const Eigen::VectorXcd& x){
 }
 
 Eigen::MatrixXcd createhouseholder(const Eigen::VectorXcd& x){
-  printf("Inside createhouseholder\n");
+  // printf("Inside createhouseholder\n");
+  /// Vector is Zero Vector
   if(x.isApprox(Eigen::VectorXcd::Zero(x.size()),TOL)){
     return Eigen::MatrixXcd::Identity(x.size(), x.size());
   }
+  /// Vector is a multiple of first basis vector
   if(x.norm() == std::abs(x(0))){
     return Eigen::MatrixXcd::Identity(x.size(), x.size());
   }
-  printf("Non-zero vector in createhouseholder\n");
+  // printf("Non-zero vector in createhouseholder\n");
   Eigen::VectorXcd v = householdervector(x);
   double tau = 2.0 / (v.squaredNorm());
   Eigen::MatrixXcd house = Eigen::MatrixXcd::Identity(v.size(), v.size()) - tau * v * v.adjoint();
+
+  // Ensure first entry is real and nonnegative
+  assert(std::abs(std::imag((house*x)(0))) < TOL);
+  if(std::real((house*x)(0)) < 0){
+    house = -house;
+  }
   return house;
 }
 
 Eigen::MatrixXcd createmultiplexor(const Eigen::MatrixXcd &firstmatrix, const Eigen::MatrixXcd &secondmatrix){
-  printf("Inside createmultiplexor\n");
+  // printf("Inside createmultiplexor\n");
   Eigen::MatrixXcd multiplexedmatrix = Eigen::MatrixXcd::Identity(firstmatrix.rows() + secondmatrix.rows(), firstmatrix.cols() + secondmatrix.cols());
 
   multiplexedmatrix.block(0, 0, firstmatrix.rows(), firstmatrix.cols()) = firstmatrix;
   multiplexedmatrix.block(firstmatrix.rows(), firstmatrix.cols(), secondmatrix.rows(), secondmatrix.cols()) = secondmatrix;
 
-  printf("Returning multiplexed matrix\n");
+  // printf("Returning multiplexed matrix\n");
   return multiplexedmatrix;
 }
 
@@ -487,7 +497,8 @@ std::tuple<Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd>
 blockbidiagonalize(const Eigen::MatrixXcd &matrix){
   printf("Inside blockbidiagonalize\n");
   int p = 4, q = 4, m = 8;
-  std::vector<double> theta = {0.0, 0.0}, phi = {0.0, 0.0};
+  // std::vector<double> theta = {0.0, 0.0}, phi = {0.0, 0.0};
+  std::vector<double> theta, phi;
   Eigen::MatrixXcd Y = matrix;
   printf("Original Matrix\n");
   printmatrix(Y);
@@ -517,18 +528,20 @@ blockbidiagonalize(const Eigen::MatrixXcd &matrix){
       u2 = -Y.block(p, 0, m-p, 1);
     }
     else{
-      u1 = std::cos(phi[(i+1)%2])*Y.block(i, i, p-i, 1) + std::sin(phi[(i+1)%2])*Y.block(i, q-1+i, p-i, 1);
-      u2 = -std::cos(phi[(i+1)%2])*Y.block(p+i, i, m-p-i, 1) - std::sin(phi[(i+1)%2])*Y.block(p+i, q-1+i, m-p-i, 1);
+      u1 = std::cos(phi[i-1])*Y.block(i, i, p-i, 1) + std::sin(phi[i-1])*Y.block(i, q-1+i, p-i, 1);
+      u2 = -std::cos(phi[i-1])*Y.block(p+i, i, m-p-i, 1) - std::sin(phi[i-1])*Y.block(p+i, q-1+i, m-p-i, 1);
     }
     printf("Assigned u1,u2\n");
+    printvector(u1);
+    printvector(u2);
     //Step 7
     printf("u1 = %lf, u2 = %lf\n", u1.norm(), u2.norm());
     // if(u2.norm() < TOL){
     //   theta[i%2] = 0;
     // }else{
-    theta[i%2] = std::atan2(u2.norm(), u1.norm());
+    theta.push_back(std::atan2(u2.norm(), u1.norm()));
     // }
-    printf("Calculated theta\n");
+    printf("theta = %f\n", theta[i]);
 
     //Step 8
     if(i==0){
@@ -545,19 +558,22 @@ blockbidiagonalize(const Eigen::MatrixXcd &matrix){
 
     //Step 9
     auto left_op = createmultiplexor(P1_i, P2_i);
-    printf("Created left_op with %ld rows and %ld cols", left_op.rows(), left_op.cols());
-    Y = left_op * Y;
+    printf("Created left_op with %ld rows and %ld cols\n", left_op.rows(), left_op.cols());
+    printmatrix(left_op);
+    Y = left_op.adjoint() * Y;
 
-    printf("Left multiplied Y with left_op\n");
+    printf("Left multiplied Y with left_op to make Y = \n");
+    printmatrix(Y);
     //Step 12
-    v2 = (std::sin(theta[i%2])*Y.block(i, p+i, 1, p-i) + std::cos(theta[i%2])*Y.block(p+i, p+i, 1, p-i)).transpose();
+    v2 = (std::sin(theta[i])*Y.block(i, p+i, 1, p-i) + std::cos(theta[i])*Y.block(p+i, p+i, 1, p-i)).transpose();
     printf("Assigned v2\n");
-    if(i<p){
+    if(i<(p-1)){
       // Step 11
-      v1 = -(std::sin(theta[i%2])*Y.block(i, i+1, 1, p-i-1) - std::cos(theta[i%2])*Y.block(p+i, i+1, 1, p-i-1)).transpose();
+      v1 = -(std::sin(theta[i])*Y.block(i, i+1, 1, p-i-1) - std::cos(theta[i])*Y.block(p+i, i+1, 1, p-i-1)).transpose();
+      printf("Assigned v1\n");
 
       // Step 14
-      phi[i%2] = std::atan2(v1.norm(), v2.norm());
+      phi.push_back(std::atan2(v1.norm(), v2.norm()));
 
       // Step 15
       // if(i==0){
@@ -572,6 +588,8 @@ blockbidiagonalize(const Eigen::MatrixXcd &matrix){
       Q1_i = Eigen::MatrixXcd::Identity(p, p);
     }
 
+    printvector(v1);
+    printvector(v2);
     printf("Created Q1_i\n");
     /// Step 19
     if(i==0){
@@ -586,13 +604,14 @@ blockbidiagonalize(const Eigen::MatrixXcd &matrix){
     printmatrix(Q2_i);
     // Step 20
     auto right_op = createmultiplexor(Q1_i, Q2_i);
-    printf("Created right_op with %ld rows and %ld cols", right_op.rows(), right_op.cols());
+    printf("Created right_op with %ld rows and %ld cols\n", right_op.rows(), right_op.cols());
+    printmatrix(right_op);
     Y = Y*right_op;
 
-    printf("Right multiplied Y with right_op\n");
+    // printf("Right multiplied Y with right_op\n");
     // Step 24
     P1 = P1 * P1_i;
-    P1 = P2 * P2_i;
+    P2 = P2 * P2_i;
     Q2 = Q2 * Q2_i;
     if(i!=(p-1)){
       Q1 = Q1 * Q1_i;
@@ -602,6 +621,7 @@ blockbidiagonalize(const Eigen::MatrixXcd &matrix){
   }
 
   Eigen::MatrixXcd P = createmultiplexor(P1, P2);
+  // Eigen::MatrixXcd P = createmultiplexor(P1.adjoint(), P2.adjoint());
   Eigen::MatrixXcd Q = createmultiplexor(Q1, Q2);
 
   Eigen::MatrixXcd reconstructedmatrix = P * Y * Q.adjoint();
