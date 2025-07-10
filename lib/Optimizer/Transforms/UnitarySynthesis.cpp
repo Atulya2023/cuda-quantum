@@ -477,7 +477,7 @@ Eigen::MatrixXcd createmultiplexor(const Eigen::MatrixXcd &firstmatrix, const Ei
   return multiplexedmatrix;
 }
 
-std::tuple<Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd>
+std::tuple<Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd, std::vector<double>, std::vector<double>>
 blockbidiagonalize(const Eigen::MatrixXcd &matrix){
   int p = 4, q = 4, m = 8;
   std::vector<double> theta, phi;
@@ -564,14 +564,83 @@ blockbidiagonalize(const Eigen::MatrixXcd &matrix){
 
   Eigen::MatrixXcd reconstructedmatrix = P * Y * Q.adjoint();
   assert(reconstructedmatrix.isApprox(matrix, TOL));
+  assert(P1.isUnitary(TOL));
+  assert(P2.isUnitary(TOL));
+  assert(Q1.isUnitary(TOL));
+  assert(Q2.isUnitary(TOL));
   assert(Y.isUnitary(TOL));
   assert(P.isUnitary(TOL));
   assert(Q.isUnitary(TOL));
 
-
-  return std::make_tuple(P, Y, Q);
+  return std::make_tuple(P1, P2, Y, Q1, Q2, theta, phi);
 }
 
+std::tuple<Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd, Eigen::MatrixXcd>
+contructblocksfromangles(std::vector<double> &theta, std::vector<double> &phi, const Eigen::MatrixXcd &matrix){
+  assert(theta.size() == (phi.size() + 1));
+  size = theta.size;
+  Eigen::MatrixXcd B11 = Eigen::MatrixXcd::Zero(theta.size(), theta.size());
+  Eigen::MatrixXcd B12 = Eigen::MatrixXcd::Zero(theta.size(), theta.size());
+  Eigen::MatrixXcd B21 = Eigen::MatrixXcd::Zero(theta.size(), theta.size());
+  Eigen::MatrixXcd B22 = Eigen::MatrixXcd::Zero(theta.size(), theta.size());
+
+  std::vector<double> costheta;
+  std::vector<double> sintheta;
+  std::vector<double> cosphi;
+  std::vector<double> sinphi;
+  for (int i=0; i<size, i++){
+    costheta.push_back(std::cos(theta[i]));
+    sintheta.push_back(std::sin(theta[i]));
+    if(i<(size-1)){
+      cosphi.push_back(std::cos(phi[i]));
+      sinphi.push_back(std::sin(phi[i]));
+    }
+  }
+
+  for (int i=1; i<size, i++){
+    B11(i, i) = costheta[i]*cosphi[i-1];
+    B21(i, i) = -sintheta[i]*cosphi[i-1];
+  }
+
+  for(int i=0; i<size-1; i++){
+    B12(i, i) = sintheta[i]*cosphi[i];
+    B22(i, i) = costheta[i]*cosphi[i];
+  }
+
+  for(int i=0; i<size-1; i++){
+    B21(i, i+1) = -costheta[i] * sinphi[i];
+    B11(i, i+1) = -sintheta[i] * sinphi[i];
+  }
+
+
+  for(int i=0; i<size; i++){
+    /// Initialize diagonal elements
+    if((i-1) > 0){
+      B11(i,i) = costheta[i] * cosphi[i-1];
+      B21(i,i) = -sintheta[i] * cosphi[i-1];
+
+      /// Initialize Upper Diagonal Elements
+      B11(i-1,i) = -sintheta[i-1] * sinphi[i-1];
+      B21(i-1,i) = -costheta[i-1] * sinphi[i-1];
+
+      /// Initialize Lower Diagonal Elements
+      B12(i,i-1) = costheta[i] * sinphi[i-1];
+      B22(i,i-1) = -sintheta[i] * sinphi[i-1];
+    }
+    if((i)<(size-1)){
+      B12(i,i) = sintheta[i] * cosphi[i];
+      B22(i,i) = costheta[i] * cosphi[i];
+    }
+  }
+
+  /// Initialize remaining elements
+  B11(0,0) = costheta[0];
+  B12(size-1, size-1) = sintheta[size-1];
+  B21(0,0) = -sintheta[0];
+  B22(size-1, size-1) = costheta[size-1];
+
+  return std::tuple<B11, B12, B21, B22>;
+}
 
 
 /// Result for 3-q CSD decomposition
@@ -602,7 +671,8 @@ struct ThreeQubitOpCSD : public Decomposer {
     phase = std::pow(targetMatrix.determinant(), 0.125);
     auto specialUnitary = targetMatrix / phase;
 
-    auto [left, diagonal, right] = blockbidiagonalize(targetMatrix);
+    auto [P1, P2, B, Q1, Q2, theta_0, phi_0] = blockbidiagonalize(targetMatrix);
+    auto [B11, B12, B21, B22] = contructblocksfromangles(theta_0, phi_0);
     Eigen::Matrix4cd Q11 = specialUnitary.template block<4, 4>(0, 0);
     Eigen::Matrix4cd Q12 = specialUnitary.template block<4, 4>(0, 4);
     Eigen::Matrix4cd Q21 = specialUnitary.template block<4, 4>(4, 0);
